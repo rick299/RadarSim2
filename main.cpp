@@ -16,6 +16,24 @@ namespace py = pybind11;
 using namespace DJI::OSDK;
 using namespace DJI::OSDK::Telemetry;
 
+// Callback function for obtaining joystick control authority
+void ObtainJoystickCtrlAuthorityCB(ErrorCode::ErrorCodeType errorCode, UserData userData)
+{
+  if (errorCode == ErrorCode::FlightControllerErr::SetControlParam::ObtainJoystickCtrlAuthoritySuccess)
+  {
+    DSTATUS("ObtainJoystickCtrlAuthoritySuccess");
+  }
+}
+
+// Callback function for releasing joystick control authority
+void ReleaseJoystickCtrlAuthorityCB(ErrorCode::ErrorCodeType errorCode, UserData userData)
+{
+  if (errorCode == ErrorCode::FlightControllerErr::SetControlParam::ReleaseJoystickCtrlAuthoritySuccess)
+  {
+    DSTATUS("ReleaseJoystickCtrlAuthoritySuccess");
+  }
+}
+
 // Radar Object Structure
 struct RadarObject {
   std::string timestamp;
