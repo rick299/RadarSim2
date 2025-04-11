@@ -5,63 +5,105 @@ import struct
 from R4_public import R4_DETECTION
 from Object_over_IP import DataClient
 
-async def process_data(sim_ip, sim_port, cpp_ip, cpp_port):
+class CustomJSONEncoder(json.JSONEncoder):
     """
-    Connect to the radar simulation server, deserialize data, and send it to the C++ client.
+    Custom JSON Encoder to handle circular references and unsupported types.
     """
-    try:
-        # Create a TCP client to connect to the simulation server
-        print(f"Connecting to simulation server at {sim_ip}:{sim_port}...")
-        reader, writer = await asyncio.open_connection(sim_ip, sim_port)
-        print("Connected to simulation server.")
+    def default(self, obj):
+        try:
+            # Attempt to serialize objects using their __dict__
+            return obj.__dict__
+        except AttributeError:
+            pass  # Fall through to default handling
 
-        # Create a TCP server for the C++ program
-        print(f"Starting C++ server at {cpp_ip}:{cpp_port}...")
-        cpp_server = await asyncio.start_server(handle_cpp_client, cpp_ip, cpp_port)
+        # Fallback to default serialization
+        return super().default(obj)
+
+def convert_frame_to_named_objects(frame):
+    """
+    Convert a frame (FrameDesc object) into a list of dictionaries with named keys.
+    """
+    # Access the `objects` field of the FrameDesc object
+    objects_list = frame.objects  # Assuming `objects` is the correct attribute
+
+    # Define the keys for the radar data
+    keys = [
+        "timestamp", "sensor", "src", "X", "Y", "Z", "Xdir", "Ydir", "Zdir",
+        "Range", "RangeRate", "Pwr", "Az", "El", "ID", "Xsize", "Ysize", "Zsize", "Conf"
+    ]
+
+    # Convert each object into a dictionary
+    objects = []
+    for obj in objects_list:
+        # Ensure `obj` is iterable, otherwise skip
+        if not hasattr(obj, "__iter__"):
+            continue
+
+        # Convert the object to a dictionary
+        named_object = dict(zip(keys, obj))
+        objects.append(named_object)
+
+    return {"objects": objects}
+
+async def process_data(sim_ip, sim_port, cpp_ip, cpp_port):
+    try:
+        # Connect to the radar simulation server
+        reader, writer = await asyncio.open_connection(sim_ip, sim_port)
+
+        # Start the TCP server for the C++ program
+        cpp_server = await asyncio.start_server(
+            lambda r, w: handle_cpp_client(r, w, reader),
+            cpp_ip,
+            cpp_port,
+        )
         async with cpp_server:
-            print("C++ server started. Waiting for connections...")
             await cpp_server.serve_forever()
     except Exception as e:
         print(f"Error in process_data: {e}")
 
-
-async def handle_cpp_client(reader, writer):
+async def handle_cpp_client(cpp_reader, cpp_writer, sim_reader):
     """
-    Handle incoming connections from the C++ program.
+    Handle incoming connections from the C++ program and forward data.
     """
     try:
         while True:
-            # Receive radar data from the simulation server
-            frame_size_data = await reader.read(4)
+            # Read data from the radar simulation server
+            frame_size_data = await sim_reader.read(4)
             if not frame_size_data:
-                print("Connection closed by simulation server.")
                 break
 
-            # Unpack frame size
+            # Unpack the frame size
             frame_size = struct.unpack('>I', frame_size_data)[0]
 
-            # Receive frame data
-            frame_data = await reader.read(frame_size)
+            # Read the frame data
+            frame_data = await sim_reader.read(frame_size)
             radar_frame = pickle.loads(frame_data)
 
-            # Convert radar frame to JSON
-            json_frame = json.dumps(radar_frame, default=lambda o: o._asdict() if isinstance(o, R4_DETECTION) else o)
+            # Convert the frame to named objects
+            try:
+                named_objects_frame = convert_frame_to_named_objects(radar_frame)
 
-            # Send JSON data to the C++ program
-            writer.write(json_frame.encode('utf-8'))
-            await writer.drain()
+                # Serialize radar data to JSON
+                json_frame = json.dumps(
+                    named_objects_frame,
+                    cls=CustomJSONEncoder,  # Use the updated custom encoder
+                )
+            except Exception as e:
+                continue  # Skip this frame and move to the next one
 
+            # Send the JSON data to the C++ program
+            cpp_writer.write((json_frame + '\n').encode('utf-8'))  # Append newline for C++ compatibility
+            await cpp_writer.drain()  # Ensure the data is sent
     except Exception as e:
-        print(f"Error handling C++ client: {e}")
+        print(f"Error in handle_cpp_client: {e}")
     finally:
-        writer.close()
-        await writer.wait_closed()
-
+        cpp_writer.close()
+        await cpp_writer.wait_closed()
 
 if __name__ == "__main__":
-    SIM_IP = "192.168.10.10"  # IP of Simulation.py
-    SIM_PORT = 4035           # Port of Simulation.py
-    CPP_IP = "127.0.0.1"      # Localhost for the C++ program
-    CPP_PORT = 5000           # Port for the C++ program
+    SIM_IP = "192.168.10.10"  # Radar simulation server IP
+    SIM_PORT = 4035           # Radar simulation server port
+    CPP_IP = "127.0.0.1"      # Localhost for C++ program
+    CPP_PORT = 5000           # Port for C++ program
 
     asyncio.run(process_data(SIM_IP, SIM_PORT, CPP_IP, CPP_PORT))
