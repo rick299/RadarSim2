@@ -7,7 +7,12 @@
 #include <cstdlib>  // For std::system
 #include <json.hpp> // Include the JSON library
 #include <boost/asio.hpp>    // Include Boost ASIO for TCP communication
+#include "flight_control_sample.hpp"
+#include "flight_sample.hpp"
+#include "dji_linux_helpers.hpp"
 
+using namespace DJI::OSDK;
+using namespace DJI::OSDK::Telemetry;
 using json = nlohmann::json;
 using boost::asio::ip::tcp;
 
@@ -25,9 +30,9 @@ struct RadarObject {
 
 void displayRadarObjects(const std::vector<RadarObject>& objects) {
     for (const auto& obj : objects) {
-        std::cout << "Radar Object: " 
-                  << "timestamp: " << obj.timestamp 
-                  << ", sensor: " << obj.sensor 
+        std::cout << "Radar Object: "
+                  << "timestamp: " << obj.timestamp
+                  << ", sensor: " << obj.sensor
                   << ", src: " << obj.src
                   << ", X: " << obj.X << ", Y: " << obj.Y << ", Z: " << obj.Z
                   << ", Range: " << obj.Range << ", Azimuth: " << obj.Az << ", Elevation: " << obj.El
@@ -39,18 +44,10 @@ void displayRadarObjects(const std::vector<RadarObject>& objects) {
 std::vector<RadarObject> parseRadarData(const std::string& jsonData) {
     std::vector<RadarObject> radarObjects;
     try {
-        // Parse the JSON data
         auto jsonFrame = json::parse(jsonData);
-
-        // Debug: Log the parsed JSON data
-        std::cout << "Parsed JSON data: " << jsonFrame.dump(4) << "\n";
-
         for (const auto& obj : jsonFrame["objects"]) {
-            // Debug: Log each object being parsed
-            std::cout << "Parsing object: " << obj.dump(4) << "\n";
-
             RadarObject radarObj;
-            radarObj.timestamp = obj.at("timestamp").dump();  // Convert to string
+            radarObj.timestamp = obj.at("timestamp").dump();
             radarObj.sensor = obj.at("sensor").get<std::string>();
             radarObj.src = obj.at("src").get<std::string>();
             radarObj.X = obj.at("X").get<float>();
@@ -73,7 +70,6 @@ std::vector<RadarObject> parseRadarData(const std::string& jsonData) {
             radarObjects.push_back(radarObj);
         }
     } catch (const std::exception& e) {
-        // Log parsing errors
         std::cerr << "Error parsing JSON data: " << e.what() << "\n";
     }
     return radarObjects;
@@ -86,48 +82,113 @@ void runPythonBridge() {
         std::cerr << "Failed to start Python bridge script. Error code: " << result << "\n";
         exit(EXIT_FAILURE);
     }
-
-    // Wait for the Python bridge to initialize
     std::this_thread::sleep_for(std::chrono::seconds(2));
     std::cout << "Python bridge started successfully.\n";
 }
 
-int main() {
-    try {
-        // Start the Python bridge
-        runPythonBridge();
-
-        boost::asio::io_context io_context;
-        tcp::socket socket(io_context);
-        tcp::resolver resolver(io_context);
-
-        auto endpoints = resolver.resolve("127.0.0.1", "5000");
-        boost::asio::connect(socket, endpoints);
-
-        std::cout << "Connected to Python bridge.\n";
-
-        while (true) {
-            boost::asio::streambuf buf;
-            boost::asio::read_until(socket, buf, "\n");
-
-            std::istream is(&buf);
-            std::string jsonData;
-            std::getline(is, jsonData);
-
-            if (jsonData.empty()) {
-                std::cerr << "Connection closed or empty data received.\n";
-                break;
-            }
-
-            // Debug: Log raw JSON data
-            std::cout << "Raw JSON data received: " << jsonData << "\n";
-
-            auto radarObjects = parseRadarData(jsonData);
-            displayRadarObjects(radarObjects);
-        }
-    } catch (const std::exception& e) {
-        std::cerr << "Error: " << e.what() << "\n";
+void ObtainJoystickCtrlAuthorityCB(ErrorCode::ErrorCodeType errorCode, UserData userData) {
+    if (errorCode == ErrorCode::FlightControllerErr::SetControlParam::ObtainJoystickCtrlAuthoritySuccess) {
+        DSTATUS("ObtainJoystickCtrlAuthoritySuccess");
     }
+}
+
+void ReleaseJoystickCtrlAuthorityCB(ErrorCode::ErrorCodeType errorCode, UserData userData) {
+    if (errorCode == ErrorCode::FlightControllerErr::SetControlParam::ReleaseJoystickCtrlAuthoritySuccess) {
+        DSTATUS("ReleaseJoystickCtrlAuthoritySuccess");
+    }
+}
+
+int main(int argc, char** argv) {
+    // Initialize variables
+    int functionTimeout = 1;
+
+    // Setup OSDK
+    LinuxSetup linuxEnvironment(argc, argv);
+    Vehicle* vehicle = linuxEnvironment.getVehicle();
+    if (vehicle == NULL) {
+        std::cout << "Vehicle not initialized, exiting.\n";
+        return -1;
+    }
+
+    vehicle->flightController->obtainJoystickCtrlAuthorityAsync(ObtainJoystickCtrlAuthorityCB, nullptr, functionTimeout, 2);
+    FlightSample* flightSample = new FlightSample(vehicle);
+
+    // Display interactive prompt
+    std::cout
+        << "| Available commands: |\n"
+        << "| [a] Monitored Takeoff + Landing |\n"
+        << "| [b] Monitored Takeoff + Position Control + Landing |\n"
+        << "| [c] Monitored Takeoff + Position Control + Force Landing |\n"
+        << "| [d] Monitored Takeoff + Velocity Control + Landing |\n"
+        << "| [e] Radar data processing |\n";
+
+    char inputChar;
+    std::cin >> inputChar;
+
+    switch (inputChar) {
+        case 'a': {
+            flightSample->monitoredTakeoff();
+            flightSample->monitoredLanding();
+            break;
+        }
+        case 'b': {
+            flightSample->monitoredTakeoff();
+            flightSample->moveByPositionOffset({0, 6, 6}, 30, 0.8, 1);
+            flightSample->monitoredLanding();
+            break;
+        }
+        case 'c': {
+            flightSample->monitoredTakeoff();
+            flightSample->moveByPositionOffset({0, 0, 30}, 0, 0.8, 1);
+            flightSample->goHomeAndConfirmLanding();
+            break;
+        }
+        case 'd': {
+            flightSample->monitoredTakeoff();
+            flightSample->velocityAndYawRateCtrl({0, 0, 5.0}, 0, 2000);
+            flightSample->monitoredLanding();
+            break;
+        }
+        case 'e': { // Radar data processing
+            try {
+                runPythonBridge();
+                boost::asio::io_context io_context;
+                tcp::socket socket(io_context);
+                tcp::resolver resolver(io_context);
+
+                auto endpoints = resolver.resolve("127.0.0.1", "5000");
+                boost::asio::connect(socket, endpoints);
+
+                std::cout << "Connected to Python bridge.\n";
+
+                while (true) {
+                    boost::asio::streambuf buf;
+                    boost::asio::read_until(socket, buf, "\n");
+
+                    std::istream is(&buf);
+                    std::string jsonData;
+                    std::getline(is, jsonData);
+
+                    if (jsonData.empty()) {
+                        std::cerr << "Connection closed or empty data received.\n";
+                        break;
+                    }
+
+                    auto radarObjects = parseRadarData(jsonData);
+                    displayRadarObjects(radarObjects);
+                }
+            } catch (const std::exception& e) {
+                std::cerr << "Error: " << e.what() << "\n";
+            }
+            break;
+        }
+        default:
+            std::cout << "Invalid input.\n";
+            break;
+    }
+
+    vehicle->flightController->releaseJoystickCtrlAuthorityAsync(ReleaseJoystickCtrlAuthorityCB, nullptr, functionTimeout, 2);
+    delete flightSample;
 
     return 0;
 }
