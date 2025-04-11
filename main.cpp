@@ -30,14 +30,27 @@ struct RadarObject {
 
 void displayRadarObjects(const std::vector<RadarObject>& objects) {
     for (const auto& obj : objects) {
-        std::cout << "Radar Object: "
-                  << "timestamp: " << obj.timestamp
-                  << ", sensor: " << obj.sensor
-                  << ", src: " << obj.src
-                  << ", X: " << obj.X << ", Y: " << obj.Y << ", Z: " << obj.Z
-                  << ", Range: " << obj.Range << ", Azimuth: " << obj.Az << ", Elevation: " << obj.El
-                  << ", Confidence: " << obj.Conf
-                  << "\n";
+        std::cout << "Radar Object:\n"
+                  << "  Timestamp: " << obj.timestamp << "\n"
+                  << "  Sensor: " << obj.sensor << "\n"
+                  << "  Source: " << obj.src << "\n"
+                  << "  ID: " << obj.ID << "\n"
+                  << "  X: " << obj.X << " "
+                  << "  Y: " << obj.Y << " "
+                  << "  Z: " << obj.Z << "\n"
+                  << "  Xdir: " << obj.Xdir << " "
+                  << "  Ydir: " << obj.Ydir << " "
+                  << "  Zdir: " << obj.Zdir << "\n"
+                  << "  Range: " << obj.Range << "\n"
+                  << "  Range Rate: " << obj.RangeRate << "\n"
+                  << "  Power: " << obj.Pwr << "\n"
+                  << "  Azimuth: " << obj.Az << "\n"
+                  << "  Elevation: " << obj.El << "\n"
+                  << "  Xsize: " << obj.Xsize << " "
+                  << "  Ysize: " << obj.Ysize << " "
+                  << "  Zsize: " << obj.Zsize << "\n"
+                  << "  Confidence: " << obj.Conf << "\n"
+                  << "----------------------------------------\n";
     }
 }
 
