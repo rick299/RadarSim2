@@ -10,6 +10,7 @@
 #include "flight_control_sample.hpp"
 #include "flight_sample.hpp"
 #include "dji_linux_helpers.hpp"
+#include <limits> // For numeric limits
 
 using namespace DJI::OSDK;
 using namespace DJI::OSDK::Telemetry;
@@ -27,6 +28,11 @@ struct RadarObject {
     float Xsize, Ysize, Zsize;
     float Conf;
 };
+
+// Persistent variables for tracking the current second and wall candidate data
+std::string currentSecond = "";  // Tracks the current second being processed
+float lowestRange = std::numeric_limits<float>::max();  // Tracks the lowest range for the current second
+bool hasAnonData = false;  // Tracks whether any "anon" ID data exists for this second
 
 void displayRadarObjects(const std::vector<RadarObject>& objects) {
     for (const auto& obj : objects) {
@@ -67,12 +73,42 @@ void displayRadarObjectsMinimal(const std::vector<RadarObject>& objects) {
     }
 }
 
-void extractBeaconData(const std::vector<RadarObject>& objects) {
+void extractBeaconAndWallData(const std::vector<RadarObject>& objects) {
     for (const auto& obj : objects) {
+        // Extract the second from the timestamp (without milliseconds)
+        std::string objSecond = obj.timestamp.substr(0, obj.timestamp.find('.'));
+
+        // Ignore data from old seconds
+        if (!currentSecond.empty() && objSecond < currentSecond) {
+            continue;
+        }
+
+        // If this is a new second
+        if (objSecond != currentSecond) {
+            // Output the result for the previous second, if any
+            if (!currentSecond.empty() && hasAnonData) {
+                std::cout << currentSecond << ": Likely WALL candidate distance: " << lowestRange << " meters\n";
+            }
+
+            // Update to the new second and reset tracking variables
+            currentSecond = objSecond;
+            lowestRange = std::numeric_limits<float>::max();  // Reset lowest range
+            hasAnonData = false;  // Reset flag for anon data
+        }
+
+        // Process BEACON IDs
         if (obj.ID.find("BEACON") != std::string::npos) {
             // Extract numerical value from ID (e.g., "BEACON123" -> "123")
             std::string numericalValue = obj.ID.substr(obj.ID.find_first_of("0123456789"));
             std::cout << "Beacon " << numericalValue << " located at " << obj.Range << " meters\n";
+        }
+
+        // Process anon IDs
+        if (obj.ID.find("anon") != std::string::npos) {
+            hasAnonData = true;
+            if (obj.Range < lowestRange) {
+                lowestRange = obj.Range;
+            }
         }
     }
 }
@@ -128,18 +164,6 @@ void stopPythonBridge() {
     std::cout << "Python bridge stopped.\n";
 }
 
-void ObtainJoystickCtrlAuthorityCB(ErrorCode::ErrorCodeType errorCode, UserData userData) {
-    if (errorCode == ErrorCode::FlightControllerErr::SetControlParam::ObtainJoystickCtrlAuthoritySuccess) {
-        DSTATUS("ObtainJoystickCtrlAuthoritySuccess");
-    }
-}
-
-void ReleaseJoystickCtrlAuthorityCB(ErrorCode::ErrorCodeType errorCode, UserData userData) {
-    if (errorCode == ErrorCode::FlightControllerErr::SetControlParam::ReleaseJoystickCtrlAuthoritySuccess) {
-        DSTATUS("ReleaseJoystickCtrlAuthoritySuccess");
-    }
-}
-
 void connectToPythonBridge(boost::asio::io_context& io_context, tcp::socket& socket) {
     tcp::resolver resolver(io_context);
     while (true) {
@@ -151,7 +175,6 @@ void connectToPythonBridge(boost::asio::io_context& io_context, tcp::socket& soc
         } catch (const std::exception& e) {
             std::cerr << "Error connecting to Python bridge: " << e.what() << "\n";
             std::cout << "Retrying in 2 seconds...\n";
-            std::this_thread::sleep_for(std::chrono::seconds(2));
         }
     }
 }
@@ -237,7 +260,7 @@ int main(int argc, char** argv) {
                         }
 
                         auto radarObjects = parseRadarData(jsonData);
-                        displayRadarObjects(radarObjects);
+                        extractBeaconAndWallData(radarObjects);
                     }
                 } catch (const std::exception& e) {
                     std::cerr << "Error: " << e.what() << "\n";
@@ -297,7 +320,7 @@ int main(int argc, char** argv) {
                         }
 
                         auto radarObjects = parseRadarData(jsonData);
-                        extractBeaconData(radarObjects); // Process only beacon data
+                        extractBeaconAndWallData(radarObjects); // Process only beacon and wall data
                     }
                 } catch (const std::exception& e) {
                     std::cerr << "Error: " << e.what() << "\n";
