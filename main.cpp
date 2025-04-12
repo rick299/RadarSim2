@@ -17,6 +17,14 @@ using namespace DJI::OSDK::Telemetry;
 using json = nlohmann::json;
 using boost::asio::ip::tcp;
 
+// Persistent variables for tracking the current second and wall candidate data
+std::string currentSecond = "";  // Tracks the current second being processed
+float lowestRange = std::numeric_limits<float>::max();  // Tracks the lowest range for the current second
+bool hasAnonData = false;  // Tracks whether any "anon" ID data exists for this second
+
+// Global variable to track the Python bridge script
+std::string pythonBridgeScript = "python_bridge.py";
+
 struct RadarObject {
     std::string timestamp;  // Changed from float to string to match JSON format
     std::string sensor;
@@ -28,11 +36,6 @@ struct RadarObject {
     float Xsize, Ysize, Zsize;
     float Conf;
 };
-
-// Persistent variables for tracking the current second and wall candidate data
-std::string currentSecond = "";  // Tracks the current second being processed
-float lowestRange = std::numeric_limits<float>::max();  // Tracks the lowest range for the current second
-bool hasAnonData = false;  // Tracks whether any "anon" ID data exists for this second
 
 void displayRadarObjects(const std::vector<RadarObject>& objects) {
     for (const auto& obj : objects) {
@@ -149,7 +152,7 @@ std::vector<RadarObject> parseRadarData(const std::string& jsonData) {
 
 void runPythonBridge() {
     std::cout << "Starting Python bridge...\n";
-    int result = std::system("python3 python_bridge.py &");
+    int result = std::system(("python3 " + pythonBridgeScript + " &").c_str());
     if (result != 0) {
         std::cerr << "Failed to start Python bridge script. Error code: " << result << "\n";
         exit(EXIT_FAILURE);
@@ -160,7 +163,7 @@ void runPythonBridge() {
 
 void stopPythonBridge() {
     std::cout << "Stopping Python bridge...\n";
-    std::system("pkill -f python_bridge.py");
+    std::system(("pkill -f " + pythonBridgeScript).c_str());
     std::cout << "Python bridge stopped.\n";
 }
 
@@ -175,11 +178,45 @@ void connectToPythonBridge(boost::asio::io_context& io_context, tcp::socket& soc
         } catch (const std::exception& e) {
             std::cerr << "Error connecting to Python bridge: " << e.what() << "\n";
             std::cout << "Retrying in 2 seconds...\n";
+            std::this_thread::sleep_for(std::chrono::seconds(2));
         }
     }
 }
 
+void ObtainJoystickCtrlAuthorityCB(ErrorCode::ErrorCodeType errorCode, UserData userData) {
+    if (errorCode == ErrorCode::FlightControllerErr::SetControlParam::ObtainJoystickCtrlAuthoritySuccess) {
+        DSTATUS("ObtainJoystickCtrlAuthoritySuccess");
+    }
+}
+
+void ReleaseJoystickCtrlAuthorityCB(ErrorCode::ErrorCodeType errorCode, UserData userData) {
+    if (errorCode == ErrorCode::FlightControllerErr::SetControlParam::ReleaseJoystickCtrlAuthoritySuccess) {
+        DSTATUS("ReleaseJoystickCtrlAuthoritySuccess");
+    }
+}
+
 int main(int argc, char** argv) {
+    // User input menu for Live or Test data
+    char modeSelection;
+    while (true) {
+        std::cout << "Select mode:\n";
+        std::cout << "  (a) Live data\n";
+        std::cout << "  (b) Test data\n";
+        std::cout << "Enter your choice: ";
+        std::cin >> modeSelection;
+
+        if (modeSelection == 'a' || modeSelection == 'A') {
+            std::cout << "Live data mode selected.\n";
+            break; // Continue with the program as is
+        } else if (modeSelection == 'b' || modeSelection == 'B') {
+            std::cout << "Test data mode selected.\n";
+            pythonBridgeScript = "python_bridge_LOCAL.py";
+            break;
+        } else {
+            std::cout << "Invalid selection. Please choose 'a' or 'b'.\n";
+        }
+    }
+
     // Initialize variables
     int functionTimeout = 1;
 
